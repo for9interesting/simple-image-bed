@@ -93,8 +93,10 @@ GitHub 页面路径：
 - `GH_USER`：GitHub 用户名
 - `GH_REPO`：仓库名（如 `image-bed`）
 - `GH_BRANCH`：`image-storage`
-- `ALLOWED_ORIGIN`：前端来源（建议精确到域名）
+- `ALLOWED_ORIGIN`：前端来源白名单（可逗号分隔多个）
+  - 只能填 Origin，不要带路径
   - 示例：`https://<USER>.github.io`
+  - 示例（多来源）：`https://<USER>.github.io,https://your-domain.com`
 
 `Secrets`（密文）：
 - `GH_PAT`：第 6 步创建的 PAT

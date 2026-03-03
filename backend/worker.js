@@ -3,7 +3,7 @@ const MIME_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 export default {
   async fetch(request, env) {
-    const cors = buildCorsHeaders(env.ALLOWED_ORIGIN || "*");
+    const cors = buildCorsHeaders(request, env.ALLOWED_ORIGIN || "*");
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     try {
       const url = new URL(request.url);
@@ -23,12 +23,28 @@ export default {
   }
 };
 
-function buildCorsHeaders(origin) {
-  return {
-    "Access-Control-Allow-Origin": origin,
+function buildCorsHeaders(request, allowListRaw) {
+  const reqOrigin = request.headers.get("Origin") || "";
+  const allowed = String(allowListRaw || "*")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const allowAny = allowed.includes("*");
+  const allowOrigin = allowAny
+    ? "*"
+    : (reqOrigin && allowed.includes(reqOrigin) ? reqOrigin : "");
+
+  const headers = {
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Max-Age": "86400",
+    "Vary": "Origin",
     "Content-Type": "application/json; charset=utf-8"
+  };
+  if (allowOrigin) headers["Access-Control-Allow-Origin"] = allowOrigin;
+
+  return {
+    ...headers
   };
 }
 
