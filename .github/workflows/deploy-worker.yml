@@ -11,15 +11,32 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy Cloudflare Worker
-        uses: cloudflare/wrangler-action@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          wranglerVersion: "4"
-          command: deploy --config wrangler.toml
-          workingDirectory: backend
+          node-version: 20
+
+      - name: Install Wrangler (retry)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            echo "Install attempt $i"
+            if npm i -D wrangler@4; then
+              exit 0
+            fi
+            rm -rf node_modules package-lock.json
+            sleep 2
+          done
+          echo "Failed to install wrangler after retries"
+          exit 1
+
+      - name: Deploy Worker
+        run: npx wrangler deploy --config backend/wrangler.toml
