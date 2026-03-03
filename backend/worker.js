@@ -191,50 +191,64 @@ async function handleLogin(request, env, cors) {
 }
 
 async function handleUpload(request, env, cors) {
+  const requestId = crypto.randomUUID();
   const auth = request.headers.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (!token) return json({ error: "Missing bearer token" }, 401, cors);
-  if (!env.SESSION_SIGNING_KEY) return json({ error: "Server is not configured" }, 500, cors);
+  if (!token) return json({ error: "Missing bearer token", requestId }, 401, cors);
+  if (!env.SESSION_SIGNING_KEY) return json({ error: "Server is not configured", requestId }, 500, cors);
   const valid = await verifySession(token, env.SESSION_SIGNING_KEY);
-  if (!valid) return json({ error: "Session expired or invalid" }, 401, cors);
+  if (!valid) return json({ error: "Session expired or invalid", requestId }, 401, cors);
 
   const body = await parseJson(request);
   const mimeType = String(body.mimeType || "");
   const contentBase64 = String(body.contentBase64 || "");
-  if (!MIME_TYPES.includes(mimeType)) return json({ error: "Unsupported image type" }, 400, cors);
-  if (!contentBase64) return json({ error: "Missing contentBase64" }, 400, cors);
+  if (!MIME_TYPES.includes(mimeType)) return json({ error: "Unsupported image type", requestId }, 400, cors);
+  if (!contentBase64) return json({ error: "Missing contentBase64", requestId }, 400, cors);
 
   let raw;
   try {
     raw = atob(contentBase64);
   } catch {
-    return json({ error: "Invalid base64 content" }, 400, cors);
+    return json({ error: "Invalid base64 content", requestId }, 400, cors);
   }
-  if (raw.length > MAX_SIZE) return json({ error: "Image is larger than 5MB" }, 400, cors);
+  if (raw.length > MAX_SIZE) return json({ error: "Image is larger than 5MB", requestId }, 400, cors);
 
   if (!env.GH_USER || !env.GH_REPO || !env.GH_BRANCH || !env.GH_PAT) {
-    return json({ error: "GitHub env is not configured" }, 500, cors);
+    return json({ error: "GitHub env is not configured", requestId }, 500, cors);
   }
 
   const path = buildPath(mimeType);
   const apiPath = path.split("/").map(encodeURIComponent).join("/");
   const ghApi = `https://api.github.com/repos/${env.GH_USER}/${env.GH_REPO}/contents/${apiPath}`;
-  const ghRes = await fetch(ghApi, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${env.GH_PAT}`,
-      Accept: "application/vnd.github+json",
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      message: `upload image ${path}`,
-      content: contentBase64,
-      branch: env.GH_BRANCH
-    })
-  });
+  let ghRes;
+  try {
+    ghRes = await fetch(ghApi, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${env.GH_PAT}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        message: `upload image ${path}`,
+        content: contentBase64,
+        branch: env.GH_BRANCH
+      })
+    });
+  } catch {
+    return json({ error: "Network error when calling GitHub API", requestId }, 502, cors);
+  }
   if (!ghRes.ok) {
-    return json({ error: `GitHub API failed: ${ghRes.status}` }, 502, cors);
+    let detail = "";
+    try {
+      const bodyText = await ghRes.text();
+      detail = bodyText.slice(0, 500);
+    } catch {
+      detail = "";
+    }
+    return json({ error: `GitHub API failed: ${ghRes.status}`, detail, requestId }, 502, cors);
   }
   const rawUrl = `https://raw.githubusercontent.com/${env.GH_USER}/${env.GH_REPO}/${env.GH_BRANCH}/${path}`;
-  return json({ rawUrl, markdown: `![](${rawUrl})`, path }, 200, cors);
+  return json({ rawUrl, markdown: `![](${rawUrl})`, path, requestId }, 200, cors);
 }

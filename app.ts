@@ -112,7 +112,12 @@ async function apiPost(path, body, token = "") {
   } catch {
     throw new Error(`接口异常（${res.status}）`);
   }
-  if (!res.ok) throw new Error(data.error || `请求失败（${res.status}）`);
+  if (!res.ok) {
+    const reason = data.error || `请求失败（${res.status}）`;
+    const detail = data.detail ? ` | detail: ${data.detail}` : "";
+    const reqId = data.requestId ? ` | requestId: ${data.requestId}` : "";
+    throw new Error(`${reason}${detail}${reqId}`);
+  }
   return data;
 }
 

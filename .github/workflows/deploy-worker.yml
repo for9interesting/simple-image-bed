@@ -38,5 +38,17 @@ jobs:
           echo "Failed to install wrangler after retries"
           exit 1
 
-      - name: Deploy Worker
-        run: npx wrangler deploy --config backend/wrangler.toml
+      - name: Deploy Worker (inject vars)
+        shell: bash
+        run: |
+          set -euo pipefail
+          GH_USER="${{ github.repository_owner }}"
+          GH_REPO="${{ github.event.repository.name }}"
+          GH_BRANCH="image-storage"
+          ALLOWED_ORIGIN="https://${GH_USER}.github.io"
+          echo "Deploy vars: GH_USER=$GH_USER GH_REPO=$GH_REPO GH_BRANCH=$GH_BRANCH ALLOWED_ORIGIN=$ALLOWED_ORIGIN"
+          npx wrangler deploy --config backend/wrangler.toml --keep-vars \
+            --var GH_USER:${GH_USER} \
+            --var GH_REPO:${GH_REPO} \
+            --var GH_BRANCH:${GH_BRANCH} \
+            --var ALLOWED_ORIGIN:${ALLOWED_ORIGIN}
