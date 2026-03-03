@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitHub 图床</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main class="app">
+    <h1>GitHub 图床</h1>
+    <p class="hint">后端验证 OTP，前端不暴露 GitHub Token</p>
+
+    <section id="loginView" class="card">
+      <label for="otpInput">6 位 OTP</label>
+      <input id="otpInput" inputmode="numeric" maxlength="6" placeholder="123456" />
+      <button id="loginBtn">登录</button>
+    </section>
+
+    <section id="uploadView" class="card hidden">
+      <label for="fileInput">选择图片</label>
+      <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+      <button id="uploadBtn">上传</button>
+      <button id="logoutBtn" class="secondary">退出登录</button>
+    </section>
+
+    <section id="resultView" class="card hidden">
+      <h2>上传结果</h2>
+      <img id="preview" alt="预览图" />
+      <label for="rawUrl">Raw URL</label>
+      <textarea id="rawUrl" rows="2" readonly></textarea>
+      <button id="copyRawBtn" class="secondary">复制 Raw URL</button>
+      <label for="markdown">Markdown</label>
+      <textarea id="markdown" rows="2" readonly></textarea>
+      <button id="copyMdBtn" class="secondary">复制 Markdown</button>
+    </section>
+
+    <p id="msg" class="msg"></p>
+  </main>
+
+  <script src="./config.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
