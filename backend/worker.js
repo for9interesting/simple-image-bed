@@ -21,6 +21,9 @@ export default {
       if (url.pathname === "/api/login" && request.method === "POST") {
         return await handleLogin(request, env, cors);
       }
+      if (url.pathname === "/api/debug/github" && request.method === "GET") {
+        return await handleDebugGithub(url, env, cors);
+      }
       if (url.pathname === "/api/upload" && request.method === "POST") {
         return await handleUpload(request, env, cors);
       }
@@ -259,4 +262,52 @@ async function handleUpload(request, env, cors) {
   }
   const rawUrl = `https://raw.githubusercontent.com/${env.GH_USER}/${env.GH_REPO}/${env.GH_BRANCH}/${path}`;
   return json({ rawUrl, markdown: `![](${rawUrl})`, path, requestId }, 200, cors);
+}
+
+async function handleDebugGithub(url, env, cors) {
+  const key = url.searchParams.get("key") || "";
+  if (!env.DEBUG_KEY || key !== env.DEBUG_KEY) {
+    return json({ error: "Forbidden" }, 403, cors);
+  }
+  if (!env.GH_PAT || !env.GH_USER || !env.GH_REPO) {
+    return json({ error: "GitHub env is not configured" }, 500, cors);
+  }
+
+  const headers = {
+    Authorization: `Bearer ${env.GH_PAT}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+
+  const out = {};
+
+  const rateRes = await fetch("https://api.github.com/rate_limit", { headers });
+  out.rateLimit = {
+    status: rateRes.status,
+    remaining: rateRes.headers.get("x-ratelimit-remaining"),
+    reset: rateRes.headers.get("x-ratelimit-reset"),
+    requestId: rateRes.headers.get("x-github-request-id")
+  };
+  try {
+    const txt = await rateRes.text();
+    out.rateLimit.body = txt.slice(0, 400);
+  } catch {
+    out.rateLimit.body = "";
+  }
+
+  const repoRes = await fetch(`https://api.github.com/repos/${env.GH_USER}/${env.GH_REPO}`, { headers });
+  out.repo = {
+    status: repoRes.status,
+    remaining: repoRes.headers.get("x-ratelimit-remaining"),
+    reset: repoRes.headers.get("x-ratelimit-reset"),
+    requestId: repoRes.headers.get("x-github-request-id")
+  };
+  try {
+    const txt = await repoRes.text();
+    out.repo.body = txt.slice(0, 400);
+  } catch {
+    out.repo.body = "";
+  }
+
+  return json({ ok: true, timestamp: Date.now(), debug: out }, 200, cors);
 }
