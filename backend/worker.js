@@ -8,7 +8,15 @@ export default {
     try {
       const url = new URL(request.url);
       if (url.pathname === "/api/health" && request.method === "GET") {
-        return json({ ok: true }, 200, cors);
+        return json({
+          ok: true,
+          ghUser: env.GH_USER || "",
+          ghRepo: env.GH_REPO || "",
+          ghBranch: env.GH_BRANCH || "",
+          hasGhPat: Boolean(env.GH_PAT),
+          hasTotpSecret: Boolean(env.TOTP_SECRET),
+          hasSessionKey: Boolean(env.SESSION_SIGNING_KEY)
+        }, 200, cors);
       }
       if (url.pathname === "/api/login" && request.method === "POST") {
         return await handleLogin(request, env, cors);
