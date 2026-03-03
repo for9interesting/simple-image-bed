@@ -239,6 +239,7 @@ async function handleUpload(request, env, cors) {
         Authorization: `Bearer ${env.GH_PAT}`,
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "image-bed-worker/1.0",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -276,7 +277,8 @@ async function handleDebugGithub(url, env, cors) {
   const headers = {
     Authorization: `Bearer ${env.GH_PAT}`,
     Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28"
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "image-bed-worker/1.0"
   };
 
   const out = {};
