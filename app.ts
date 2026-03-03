@@ -34,9 +34,21 @@ function sanitizeOtp(input) {
 
 function getApiBase() {
   if (typeof CONFIG === "undefined" || !CONFIG.apiBase) {
-    throw new Error("缺少 CONFIG.apiBase，请检查部署配置");
+    throw new Error("Missing CONFIG.apiBase, please check deployment config.");
   }
-  return CONFIG.apiBase.replace(/\/+$/, "");
+  let raw = String(CONFIG.apiBase).trim();
+  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("CONFIG.apiBase is invalid.");
+  }
+  if (!/^https?:$/i.test(parsed.protocol)) {
+    throw new Error("CONFIG.apiBase must start with http:// or https://");
+  }
+  return parsed.origin;
 }
 
 function saveAuth(token, expiresAt) {
@@ -93,6 +105,7 @@ async function apiPost(path, body, token = "") {
     },
     body: JSON.stringify(body)
   });
+
   let data = {};
   try {
     data = await res.json();
@@ -110,11 +123,15 @@ async function loginWithOtp(otp) {
 
 async function uploadImage(file, token) {
   const contentBase64 = await fileToBase64(file);
-  return apiPost("/api/upload", {
-    fileName: file.name || `upload.${getExtByType(file.type)}`,
-    mimeType: file.type,
-    contentBase64
-  }, token);
+  return apiPost(
+    "/api/upload",
+    {
+      fileName: file.name || `upload.${getExtByType(file.type)}`,
+      mimeType: file.type,
+      contentBase64
+    },
+    token
+  );
 }
 
 async function copyText(text) {
