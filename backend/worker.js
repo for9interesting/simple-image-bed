@@ -24,10 +24,10 @@ export default {
 };
 
 function buildCorsHeaders(request, allowListRaw) {
-  const reqOrigin = request.headers.get("Origin") || "";
+  const reqOrigin = normalizeOrigin(request.headers.get("Origin") || "");
   const allowed = String(allowListRaw || "*")
     .split(",")
-    .map((v) => v.trim())
+    .map((v) => normalizeOrigin(v))
     .filter(Boolean);
   const allowAny = allowed.includes("*");
   const allowOrigin = allowAny
@@ -46,6 +46,19 @@ function buildCorsHeaders(request, allowListRaw) {
   return {
     ...headers
   };
+}
+
+function normalizeOrigin(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw === "*") return "*";
+  let src = raw;
+  if (!/^https?:\/\//i.test(src)) src = `https://${src}`;
+  try {
+    return new URL(src).origin;
+  } catch {
+    return "";
+  }
 }
 
 function json(data, status, headers) {
