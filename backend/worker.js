@@ -401,17 +401,33 @@ async function getFeishuTenantAccessToken(env) {
   return feishuTokenCache.token;
 }
 
-async function downloadFeishuImage(imageKey, token) {
-  const res = await fetch(`${FEISHU_API_BASE}/im/v1/images/${encodeURIComponent(imageKey)}`, {
+async function readErrorText(resp) {
+  try {
+    return (await resp.text()).slice(0, 500);
+  } catch {
+    return "";
+  }
+}
+
+async function downloadFeishuImageByMessageResource(messageId, imageKey, token) {
+  const url = `${FEISHU_API_BASE}/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(imageKey)}?type=image`;
+  const res = await fetch(url, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}` }
   });
-  if (!res.ok) throw new Error(`Feishu image API failed: ${res.status}`);
+  if (!res.ok) {
+    const detail = await readErrorText(res);
+    const logid = res.headers.get("x-tt-logid") || "";
+    throw new Error(`Feishu message resource API failed: ${res.status}; logid=${logid}; detail=${detail}`);
+  }
+  return new Uint8Array(await res.arrayBuffer());
+}
 
-  const bytes = new Uint8Array(await res.arrayBuffer());
+async function downloadFeishuImage(imageKey, messageId, token) {
+  if (!messageId) throw new Error("Missing message_id for Feishu message resource API");
+  const bytes = await downloadFeishuImageByMessageResource(messageId, imageKey, token);
   if (!bytes.length) throw new Error("Empty image data from Feishu");
-
-  const mimeType = normalizeMimeTypeFromFeishu(res.headers.get("content-type") || "", bytes);
+  const mimeType = normalizeMimeTypeFromFeishu("", bytes);
   if (!mimeType) throw new Error("Unsupported image type from Feishu");
   return { bytes, mimeType };
 }
@@ -430,23 +446,27 @@ async function handleFeishuCallback(request, env, cors, ctx) {
   }
 
   const header = body.header || {};
-  if (env.FEISHU_VERIFICATION_TOKEN && header.token !== env.FEISHU_VERIFICATION_TOKEN) {
+  const eventToken = String(header.token || body.token || "");
+  if (env.FEISHU_VERIFICATION_TOKEN && eventToken !== env.FEISHU_VERIFICATION_TOKEN) {
     return json({ error: "Invalid event token", requestId }, 403, cors);
   }
-  if (String(header.event_type || "") !== "im.message.receive_v1") {
+  const eventType = String(header.event_type || (body.event || {}).type || "");
+  if (eventType !== "im.message.receive_v1" && eventType !== "message") {
     return json({ code: 0, msg: "ignored", requestId }, 200, cors);
   }
 
   const message = (body.event || {}).message || {};
-  if (String(message.message_type || "") !== "image") {
+  const messageType = String(message.message_type || message.msg_type || "");
+  if (messageType !== "image") {
     return json({ code: 0, msg: "ignored_non_image", requestId }, 200, cors);
   }
 
   const content = parseJsonSafe(String(message.content || ""));
-  const imageKey = String((content || {}).image_key || "");
+  const imageKey = String((content || {}).image_key || message.image_key || "");
+  const messageId = String(message.message_id || "");
   if (!imageKey) return json({ code: 0, msg: "missing_image_key", requestId }, 200, cors);
 
-  const task = processFeishuImageEvent({ imageKey, env, requestId });
+  const task = processFeishuImageEvent({ imageKey, messageId, env, requestId });
   if (ctx && typeof ctx.waitUntil === "function") {
     ctx.waitUntil(task);
   } else {
@@ -455,7 +475,7 @@ async function handleFeishuCallback(request, env, cors, ctx) {
   return json({ code: 0, msg: "accepted", requestId }, 200, cors);
 }
 
-async function processFeishuImageEvent({ imageKey, env, requestId }) {
+async function processFeishuImageEvent({ imageKey, messageId, env, requestId }) {
   let feishuToken;
   try {
     feishuToken = await getFeishuTenantAccessToken(env);
@@ -466,7 +486,7 @@ async function processFeishuImageEvent({ imageKey, env, requestId }) {
 
   let image;
   try {
-    image = await downloadFeishuImage(imageKey, feishuToken);
+    image = await downloadFeishuImage(imageKey, messageId, feishuToken);
   } catch (err) {
     console.error("feishu_download_image_failed", requestId, err?.message || err);
     return;

@@ -61,12 +61,12 @@ async function relayToWorker(rawBody) {
       body: rawBody,
       signal: ctrl.signal
     });
+    const txt = await res.text().catch(() => "");
     if (!res.ok) {
-      const txt = await res.text().catch(() => "");
       console.error("relay_failed_status", res.status, txt.slice(0, 300));
       return;
     }
-    console.log("relay_ok");
+    console.log("relay_ok_status", res.status, txt.slice(0, 300));
   } catch (err) {
     console.error("relay_failed_error", err?.message || err);
   } finally {
@@ -99,6 +99,8 @@ const server = http.createServer(async (req, res) => {
 
   const body = parseJsonSafe(rawBody);
   if (!body) return json(res, 400, { error: "Invalid JSON" });
+  const eventType = String((body.header || {}).event_type || (body.event || {}).type || body.type || "");
+  console.log("incoming_event", eventType || "unknown");
 
   if (body.type === "url_verification") {
     if (!validateToken(String(body.token || ""))) {
