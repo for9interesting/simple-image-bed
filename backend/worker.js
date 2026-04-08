@@ -13,7 +13,7 @@ const FEISHU_API_BASE = "https://open.feishu.cn/open-apis";
 let feishuTokenCache = { token: "", exp: 0 };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const cors = buildCorsHeaders(request, env.ALLOWED_ORIGIN || "*");
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     try {
@@ -36,7 +36,7 @@ export default {
         return await handleLogin(request, env, cors);
       }
       if (url.pathname === "/api/feishu/callback" && request.method === "POST") {
-        return await handleFeishuCallback(request, env, cors);
+        return await handleFeishuCallback(request, env, cors, ctx);
       }
       if (url.pathname === "/api/debug/github" && request.method === "GET") {
         return await handleDebugGithub(url, env, cors);
@@ -416,7 +416,7 @@ async function downloadFeishuImage(imageKey, token) {
   return { bytes, mimeType };
 }
 
-async function handleFeishuCallback(request, env, cors) {
+async function handleFeishuCallback(request, env, cors, ctx) {
   const requestId = crypto.randomUUID();
   const raw = await request.text();
   const body = parseJsonSafe(raw);
@@ -446,20 +446,35 @@ async function handleFeishuCallback(request, env, cors) {
   const imageKey = String((content || {}).image_key || "");
   if (!imageKey) return json({ code: 0, msg: "missing_image_key", requestId }, 200, cors);
 
+  const task = processFeishuImageEvent({ imageKey, env, requestId });
+  if (ctx && typeof ctx.waitUntil === "function") {
+    ctx.waitUntil(task);
+  } else {
+    void task;
+  }
+  return json({ code: 0, msg: "accepted", requestId }, 200, cors);
+}
+
+async function processFeishuImageEvent({ imageKey, env, requestId }) {
   let feishuToken;
   try {
     feishuToken = await getFeishuTenantAccessToken(env);
   } catch (err) {
-    return json({ error: err.message || "Failed to get Feishu token", requestId }, 502, cors);
+    console.error("feishu_get_token_failed", requestId, err?.message || err);
+    return;
   }
 
   let image;
   try {
     image = await downloadFeishuImage(imageKey, feishuToken);
   } catch (err) {
-    return json({ error: err.message || "Failed to download Feishu image", requestId }, 502, cors);
+    console.error("feishu_download_image_failed", requestId, err?.message || err);
+    return;
   }
-  if (image.bytes.length > MAX_SIZE) return json({ error: "Image is larger than 5MB", requestId }, 400, cors);
+  if (image.bytes.length > MAX_SIZE) {
+    console.error("feishu_image_too_large", requestId, image.bytes.length);
+    return;
+  }
 
   const contentBase64 = bytesToBase64(image.bytes);
   const uploaded = await uploadToGithub({
@@ -467,12 +482,15 @@ async function handleFeishuCallback(request, env, cors) {
     contentBase64,
     env,
     requestId,
-    cors
+    cors: { "Content-Type": "application/json; charset=utf-8" }
   });
-  if (uploaded.error) return uploaded.error;
+  if (uploaded.error) {
+    console.error("feishu_upload_github_failed", requestId);
+    return;
+  }
 
   const { rawUrl, path } = uploaded.data;
-  return json({ code: 0, msg: "ok", requestId, path, rawUrl }, 200, cors);
+  console.log("feishu_upload_ok", requestId, path, rawUrl);
 }
 
 async function handleDebugGithub(url, env, cors) {

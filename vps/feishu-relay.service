@@ -1,0 +1,15 @@
+[Unit]
+Description=Feishu Callback Relay
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/image-bed/vps
+EnvironmentFile=/opt/image-bed/vps/relay.env
+ExecStart=/usr/bin/node /opt/image-bed/vps/relay-server.mjs
+Restart=always
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target
