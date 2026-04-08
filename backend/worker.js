@@ -1,5 +1,16 @@
 const MAX_SIZE = 5 * 1024 * 1024;
-const MIME_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+const MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "image/bmp",
+  "image/tiff",
+  "image/x-icon",
+  "image/vnd.microsoft.icon"
+];
+const FEISHU_API_BASE = "https://open.feishu.cn/open-apis";
+let feishuTokenCache = { token: "", exp: 0 };
 
 export default {
   async fetch(request, env) {
@@ -15,11 +26,17 @@ export default {
           ghBranch: env.GH_BRANCH || "",
           hasGhPat: Boolean(env.GH_PAT),
           hasTotpSecret: Boolean(env.TOTP_SECRET),
-          hasSessionKey: Boolean(env.SESSION_SIGNING_KEY)
+          hasSessionKey: Boolean(env.SESSION_SIGNING_KEY),
+          hasFeishuAppId: Boolean(env.FEISHU_APP_ID),
+          hasFeishuAppSecret: Boolean(env.FEISHU_APP_SECRET),
+          hasFeishuVerifyToken: Boolean(env.FEISHU_VERIFICATION_TOKEN)
         }, 200, cors);
       }
       if (url.pathname === "/api/login" && request.method === "POST") {
         return await handleLogin(request, env, cors);
+      }
+      if (url.pathname === "/api/feishu/callback" && request.method === "POST") {
+        return await handleFeishuCallback(request, env, cors);
       }
       if (url.pathname === "/api/debug/github" && request.method === "GET") {
         return await handleDebugGithub(url, env, cors);
@@ -88,6 +105,9 @@ function pickExt(type) {
   if (type === "image/png") return "png";
   if (type === "image/webp") return "webp";
   if (type === "image/gif") return "gif";
+  if (type === "image/bmp") return "bmp";
+  if (type === "image/tiff") return "tiff";
+  if (type === "image/x-icon" || type === "image/vnd.microsoft.icon") return "ico";
   return "jpg";
 }
 
@@ -224,8 +244,15 @@ async function handleUpload(request, env, cors) {
   }
   if (raw.length > MAX_SIZE) return json({ error: "Image is larger than 5MB", requestId }, 400, cors);
 
+  const uploaded = await uploadToGithub({ mimeType, contentBase64, env, requestId, cors });
+  if (uploaded.error) return uploaded.error;
+  const { rawUrl, path } = uploaded.data;
+  return json({ rawUrl, markdown: `![](${rawUrl})`, path, requestId }, 200, cors);
+}
+
+async function uploadToGithub({ mimeType, contentBase64, env, requestId, cors }) {
   if (!env.GH_USER || !env.GH_REPO || !env.GH_BRANCH || !env.GH_PAT) {
-    return json({ error: "GitHub env is not configured", requestId }, 500, cors);
+    return { error: json({ error: "GitHub env is not configured", requestId }, 500, cors) };
   }
 
   const path = buildPath(mimeType);
@@ -249,7 +276,7 @@ async function handleUpload(request, env, cors) {
       })
     });
   } catch {
-    return json({ error: "Network error when calling GitHub API", requestId }, 502, cors);
+    return { error: json({ error: "Network error when calling GitHub API", requestId }, 502, cors) };
   }
   if (!ghRes.ok) {
     let detail = "";
@@ -259,10 +286,193 @@ async function handleUpload(request, env, cors) {
     } catch {
       detail = "";
     }
-    return json({ error: `GitHub API failed: ${ghRes.status}`, detail, requestId }, 502, cors);
+    return { error: json({ error: `GitHub API failed: ${ghRes.status}`, detail, requestId }, 502, cors) };
   }
+
   const rawUrl = `https://raw.githubusercontent.com/${env.GH_USER}/${env.GH_REPO}/${env.GH_BRANCH}/${path}`;
-  return json({ rawUrl, markdown: `![](${rawUrl})`, path, requestId }, 200, cors);
+  return { data: { rawUrl, path } };
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function detectMimeTypeByBytes(bytes) {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38
+  ) {
+    return "image/gif";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+    return "image/bmp";
+  }
+  if (
+    bytes.length >= 4 &&
+    ((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2a && bytes[3] === 0x00) ||
+      (bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0x00 && bytes[3] === 0x2a))
+  ) {
+    return "image/tiff";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0x01 && bytes[3] === 0x00) {
+    return "image/x-icon";
+  }
+  return "";
+}
+
+function normalizeMimeTypeFromFeishu(contentType, bytes) {
+  const ct = String(contentType || "").split(";")[0].trim().toLowerCase();
+  if (MIME_TYPES.includes(ct)) return ct;
+  const guessed = detectMimeTypeByBytes(bytes);
+  if (MIME_TYPES.includes(guessed)) return guessed;
+  return "";
+}
+
+function parseJsonSafe(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+async function getFeishuTenantAccessToken(env) {
+  const now = Date.now();
+  if (feishuTokenCache.token && now < feishuTokenCache.exp - 30_000) {
+    return feishuTokenCache.token;
+  }
+  if (!env.FEISHU_APP_ID || !env.FEISHU_APP_SECRET) {
+    throw new Error("Feishu env is not configured");
+  }
+
+  const res = await fetch(`${FEISHU_API_BASE}/auth/v3/tenant_access_token/internal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      app_id: env.FEISHU_APP_ID,
+      app_secret: env.FEISHU_APP_SECRET
+    })
+  });
+  if (!res.ok) throw new Error(`Feishu token API failed: ${res.status}`);
+
+  const data = await res.json();
+  if (Number(data.code) !== 0 || !data.tenant_access_token) {
+    throw new Error(`Feishu token API error: ${String(data.msg || data.message || data.code || "unknown")}`);
+  }
+
+  const expireSec = Number(data.expire || 7200);
+  feishuTokenCache = {
+    token: data.tenant_access_token,
+    exp: now + Math.max(60, expireSec) * 1000
+  };
+  return feishuTokenCache.token;
+}
+
+async function downloadFeishuImage(imageKey, token) {
+  const res = await fetch(`${FEISHU_API_BASE}/im/v1/images/${encodeURIComponent(imageKey)}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error(`Feishu image API failed: ${res.status}`);
+
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (!bytes.length) throw new Error("Empty image data from Feishu");
+
+  const mimeType = normalizeMimeTypeFromFeishu(res.headers.get("content-type") || "", bytes);
+  if (!mimeType) throw new Error("Unsupported image type from Feishu");
+  return { bytes, mimeType };
+}
+
+async function handleFeishuCallback(request, env, cors) {
+  const requestId = crypto.randomUUID();
+  const raw = await request.text();
+  const body = parseJsonSafe(raw);
+  if (!body) return json({ error: "Invalid JSON", requestId }, 400, cors);
+
+  if (body.type === "url_verification") {
+    if (env.FEISHU_VERIFICATION_TOKEN && body.token !== env.FEISHU_VERIFICATION_TOKEN) {
+      return json({ error: "Invalid verification token", requestId }, 403, cors);
+    }
+    return json({ challenge: String(body.challenge || "") }, 200, cors);
+  }
+
+  const header = body.header || {};
+  if (env.FEISHU_VERIFICATION_TOKEN && header.token !== env.FEISHU_VERIFICATION_TOKEN) {
+    return json({ error: "Invalid event token", requestId }, 403, cors);
+  }
+  if (String(header.event_type || "") !== "im.message.receive_v1") {
+    return json({ code: 0, msg: "ignored", requestId }, 200, cors);
+  }
+
+  const message = (body.event || {}).message || {};
+  if (String(message.message_type || "") !== "image") {
+    return json({ code: 0, msg: "ignored_non_image", requestId }, 200, cors);
+  }
+
+  const content = parseJsonSafe(String(message.content || ""));
+  const imageKey = String((content || {}).image_key || "");
+  if (!imageKey) return json({ code: 0, msg: "missing_image_key", requestId }, 200, cors);
+
+  let feishuToken;
+  try {
+    feishuToken = await getFeishuTenantAccessToken(env);
+  } catch (err) {
+    return json({ error: err.message || "Failed to get Feishu token", requestId }, 502, cors);
+  }
+
+  let image;
+  try {
+    image = await downloadFeishuImage(imageKey, feishuToken);
+  } catch (err) {
+    return json({ error: err.message || "Failed to download Feishu image", requestId }, 502, cors);
+  }
+  if (image.bytes.length > MAX_SIZE) return json({ error: "Image is larger than 5MB", requestId }, 400, cors);
+
+  const contentBase64 = bytesToBase64(image.bytes);
+  const uploaded = await uploadToGithub({
+    mimeType: image.mimeType,
+    contentBase64,
+    env,
+    requestId,
+    cors
+  });
+  if (uploaded.error) return uploaded.error;
+
+  const { rawUrl, path } = uploaded.data;
+  return json({ code: 0, msg: "ok", requestId, path, rawUrl }, 200, cors);
 }
 
 async function handleDebugGithub(url, env, cors) {
