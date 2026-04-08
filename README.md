@@ -1,50 +1,38 @@
-# 极简 GitHub 图床
+# Simple Image Bed
 
-本项目是一个可部署到 GitHub Pages 的图床页面，上传前需要 TOTP 验证。
+A Simple image bed deployed to Github Pages, Cloudflare Workers and Feishu(optional).
 
-## 1. 架构总览
+## What's included
 
-- 前端：GitHub Pages（`index.html` + `app.ts` + `style.css`）
-- 后端：Cloudflare Worker（`backend/worker.js`）
-- 存储：GitHub 仓库 `image-storage` 分支
+- Frontend：GitHub Pages
+- Backend：Cloudflare Worker
+- Storage：GitHub repo `image-storage` branch
 - CI/CD：
-  - `.github/workflows/deploy-pages.yml`（部署前端）
-  - `.github/workflows/deploy-worker.yml`（部署 Worker）
+  - `.github/workflows/deploy-pages.yml`
+  - `.github/workflows/deploy-worker.yml`
+- Addtional: Feishu Bot
+> Feishu doesn't seem to support cloudflare workers as callback server due to network connection failure. Use a VPS in that case to relay your request.
 
-上传链路：
-1. 用户在前端输入 OTP
-2. 前端请求 Worker `/api/login`
-3. Worker 校验 TOTP 成功后签发 1 小时会话 token
-4. 前端上传图片到 Worker `/api/upload`
-5. Worker 用 `GH_PAT` 上传到 `image-storage/YYYY/MM/DD/uuid.ext`
-6. 前端展示 Raw URL 和 Markdown
+## How to Upload
 
-## 2. 仓库结构
+1. Login: OTP->frontend page
+2. Upload your image (<5MB)
+3. Image uploaded to github, relative URL presented & ready to copy.
 
-```txt
-repo/
-  index.html
-  app.ts
-  style.css
-  config.example.ts
-  scripts/gen_totp.py
-  backend/worker.js
-  backend/wrangler.toml
-  .github/workflows/deploy-pages.yml
-  .github/workflows/deploy-worker.yml
-  README.md
-```
+Or via Feishu:
+1. Send image to your feishu bot.
+2. Done.
 
-## 3. 前置准备
+## What's needed for deployment
 
-你需要：
-1. GitHub 账号和仓库（例如 `image-bed`）
-2. Cloudflare 账号（用于 Worker）
-3. Python 3（用于一键生成 TOTP secret + 二维码）
+1. GitHub account; A Github repo.
+2. Cloudflare account.
+3. (For feishu): A feishu developer account.
 
-## 4. 创建存图分支
+## How to Deploy Project
 
-在仓库执行：
+### Local Setup
+Under repository folder:
 
 ```bash
 git checkout --orphan image-storage
@@ -52,104 +40,100 @@ git commit --allow-empty -m "init image storage branch"
 git push origin image-storage
 git checkout main
 ```
+`image-storage` branch is for images only.
 
-`image-storage` 分支只用于存图片。
-
-## 5. 一键生成 TOTP Secret + 二维码
-
-执行：
+### Generate TOTP secret & QR Code
 
 ```bash
 python scripts/gen_totp.py --account "your-name" --issuer "ImageBed"
 ```
 
-会在 `build/` 生成（`build/` 已被 `.gitignore` 忽略）：
+Find these under `build/`:
 - `totp-secret.txt`
 - `otpauth-url.txt`
 - `totp-qrcode.png`
-- `qrcode-url.txt`（二维码下载失败时兜底）
+- `qrcode-url.txt`
 
-把 `build/totp-secret.txt` 的值保存好，后续作为 `TOTP_SECRET`。
+Save what's in `build/totp-secret.txt` that will later be used as `TOTP_SECRET`.
 
-## 6. 创建 GitHub Fine-grained PAT
+### Create GitHub Fine-grained PAT
 
-GitHub 页面路径：
+on Github:
 1. `Settings` -> `Developer settings` -> `Personal access tokens` -> `Fine-grained tokens`
-2. 点击 `Generate new token`
-3. `Repository access` 选当前仓库
-4. `Permissions` 只给：
+2. Click on `Generate new token`
+3. `Repository access` -> Current repo
+4. `Permissions` enabled:
    - `Contents: Read and write`
-5. 生成并复制 token
+5. Generate & Copy token.
 
-这个 token 仅用于后端变量 `GH_PAT`，不要放前端。
+This token will later be used as `GH_PAT` **for backend**.
 
-## 7. 配置 Cloudflare Worker
+### Setup Cloudflare Worker
 
-### 7.1 Worker 变量
+#### Worker Variables
 
-在 Worker 设置中配置：
+in Worker settings:
 
-`Vars`（明文）：
-- `GH_USER`：GitHub 用户名
-- `GH_REPO`：仓库名（如 `image-bed`）
+`Vars`：
+- `GH_USER`：GitHub user name
+- `GH_REPO`：repo name（如 `image-bed`）
 - `GH_BRANCH`：`image-storage`
-- `ALLOWED_ORIGIN`：前端来源白名单（可逗号分隔多个）
-  - 只能填 Origin，不要带路径
-  - 示例：`https://<USER>.github.io`
-  - 示例（多来源）：`https://<USER>.github.io,https://your-domain.com`
+- `ALLOWED_ORIGIN`：
+  - Example：`https://<USER>.github.io`
+  - Multi：`https://<USER>.github.io,https://your-domain.com`
 
-`Secrets`（密文）：
-- `GH_PAT`：第 6 步创建的 PAT
-- `TOTP_SECRET`：第 5 步生成的 secret
-- `SESSION_SIGNING_KEY`：随机长字符串（建议 32+ 字符）
+`Secrets`：
+- `GH_PAT`: Generated previously.
+- `TOTP_SECRET`: Generated previously.
+- `SESSION_SIGNING_KEY`：Set a random string here.
 
-### 7.2 Worker 地址
+#### Worker address
 
-记下 Worker 域名，例如：
+Should look like:
 
 ```txt
-https://image-bed-api.xxx.workers.dev
+https://image-bed-backend.xxx.workers.dev
 ```
 
-## 8. 配置 GitHub 仓库 Secrets / Variables
+### Setup GitHub repo Secrets / Variables
 
-仓库路径：`Settings` -> `Secrets and variables`
+Repo：`Settings` -> `Secrets and variables`
 
 `Actions Secrets`：
-- `CF_API_TOKEN`：Cloudflare API Token（允许部署 Worker）
+- `CF_API_TOKEN`：Cloudflare API Token
 - `CF_ACCOUNT_ID`：Cloudflare Account ID
 
 `Actions Variables`：
-- `PUBLIC_API_BASE`：Worker 地址（如上一步 URL）
+- `PUBLIC_API_BASE`：Worker address.
 
-说明：
-- `PUBLIC_API_BASE` 是公开信息，可放变量
-- `GH_PAT`、`TOTP_SECRET` 不会写入前端 Pages 产物
 
-## 9. 启用并触发部署
+### Trigger deployment
 
-### 9.1 启用 Pages
+#### Enable Pages
 
-1. 进入 GitHub 仓库 `Settings` -> `Pages`
-2. `Source` 选择 `GitHub Actions`
+1. Enter GitHub repo `Settings` -> `Pages`
+2. `Source` -> `GitHub Actions`
 
-### 9.2 触发部署
+As of now, uploading images via webpage should be ready. Test it on `https://xxx.github.io/image-bed/`.
 
-推送 `main` 分支后：
-- 前端自动跑 `deploy-pages.yml`
-- 后端改动时自动跑 `deploy-worker.yml`
+### Deploy it to feishu robot
 
-页面地址通常为：
+1. Become a feishu developer;
+2. Create an app here: https://open.feishu.cn/app
+3. Enter your *worker address* as event & callback url.
+#### Cloudflare worker URL is not available?
+You need a VPS. Deploy what's under folder vps/ to your VPS to relay api calls:
 
-```txt
-https://<USER>.github.io/image-bed/
+```bash
+scp vps/relay-server.mjs root@<VPS_IP>:/opt/image-bed/vps/
+scp vps/relay.env.example root@<VPS_IP>:/opt/image-bed/vps/relay.env
+scp vps/feishu-relay.service root@<VPS_IP>:/etc/systemd/system/feishu-relay.service
 ```
+On your VPS:
 
-## 10. 首次验收清单（建议逐项验证）
-
-1. 打开页面，输入 6 位 OTP 可成功登录
-2. 上传 `png/jpg/jpeg/webp/gif` 成功
-3. 上传超过 5MB 被拒绝
-4. 上传非图片类型被拒绝
-5. 成功后返回 Raw URL 与 Markdown，可复制
-6. `image-storage` 分支中出现 `YYYY/MM/DD/uuid.ext`
+```bash
+systemctl daemon-reload
+systemctl enable feishu-relay
+systemctl restart feishu-relay
+systemctl status feishu-relay --no-pager
+```
