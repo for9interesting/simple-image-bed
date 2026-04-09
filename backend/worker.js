@@ -369,6 +369,28 @@ function parseJsonSafe(text) {
   }
 }
 
+function collectFeishuImageKeysDeep(node, outSet) {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectFeishuImageKeysDeep(item, outSet);
+    return;
+  }
+  const imageKey = String(node.image_key || "").trim();
+  if (imageKey) outSet.add(imageKey);
+  for (const val of Object.values(node)) {
+    collectFeishuImageKeysDeep(val, outSet);
+  }
+}
+
+function extractFeishuImageKeysFromMessage(message) {
+  const out = new Set();
+  const direct = String(message.image_key || "").trim();
+  if (direct) out.add(direct);
+  const content = parseJsonSafe(String(message.content || ""));
+  collectFeishuImageKeysDeep(content, out);
+  return Array.from(out);
+}
+
 async function getFeishuTenantAccessToken(env) {
   const now = Date.now();
   if (feishuTokenCache.token && now < feishuTokenCache.exp - 30_000) {
@@ -482,7 +504,7 @@ function buildFeishuUploadStatusCard({ status, requestId, rawUrl, path, detail }
       elements: [{ tag: "plain_text", content: `Path: ${path}` }]
     });
   }
-  if (safeDetail && status !== "success") {
+  if (safeDetail) {
     elements.push({
       tag: "note",
       elements: [{ tag: "plain_text", content: safeDetail }]
@@ -602,8 +624,8 @@ async function handleFeishuCallback(request, env, cors, ctx) {
   const message = (body.event || {}).message || {};
   const messageId = String(message.message_id || "");
   if (!messageId) return json({ code: 0, msg: "missing_message_id", requestId }, 200, cors);
-  const messageType = String(message.message_type || message.msg_type || "");
-  if (messageType !== "image") {
+  const imageKeys = extractFeishuImageKeysFromMessage(message);
+  if (!imageKeys.length) {
     const task = processFeishuNonImageEvent({ messageId, env, requestId });
     if (ctx && typeof ctx.waitUntil === "function") {
       ctx.waitUntil(task);
@@ -613,11 +635,10 @@ async function handleFeishuCallback(request, env, cors, ctx) {
     return json({ code: 0, msg: "handled_non_image", requestId }, 200, cors);
   }
 
-  const content = parseJsonSafe(String(message.content || ""));
-  const imageKey = String((content || {}).image_key || message.image_key || "");
-  if (!imageKey) return json({ code: 0, msg: "missing_image_key", requestId }, 200, cors);
+  const imageKey = imageKeys[0];
+  const skippedImageCount = Math.max(0, imageKeys.length - 1);
 
-  const task = processFeishuImageEvent({ imageKey, messageId, env, requestId });
+  const task = processFeishuImageEvent({ imageKey, skippedImageCount, messageId, env, requestId });
   if (ctx && typeof ctx.waitUntil === "function") {
     ctx.waitUntil(task);
   } else {
@@ -645,7 +666,7 @@ async function processFeishuNonImageEvent({ messageId, env, requestId }) {
   }
 }
 
-async function processFeishuImageEvent({ imageKey, messageId, env, requestId }) {
+async function processFeishuImageEvent({ imageKey, skippedImageCount, messageId, env, requestId }) {
   let feishuToken;
   try {
     feishuToken = await getFeishuTenantAccessToken(env);
@@ -724,11 +745,18 @@ async function processFeishuImageEvent({ imageKey, messageId, env, requestId }) 
 
   const { rawUrl, path } = uploaded.data;
   console.log("feishu_upload_ok", requestId, path, rawUrl);
+  const skippedDetail = skippedImageCount > 0
+    ? `Found ${skippedImageCount + 1} images in one message. Uploaded only the first image by design.`
+    : "";
+  const fallbackText = skippedDetail
+    ? `✅ Successfully uploaded: ${rawUrl}\n${skippedDetail}`
+    : `✅ Successfully uploaded: ${rawUrl}`;
   await finalizeStatus({
     status: "success",
     rawUrl,
     path,
-    fallbackText: `✅ Successfully uploaded: ${rawUrl}`
+    detail: skippedDetail,
+    fallbackText
   });
 }
 
