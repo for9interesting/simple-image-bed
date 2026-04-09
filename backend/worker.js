@@ -454,9 +454,9 @@ function buildFeishuUploadStatusCard({ status, requestId, rawUrl, path, detail }
     status === "success" ? "Image Upload Succeeded" : status === "failed" ? "Image Upload Failed" : "Uploading Image";
   const statusLine =
     status === "success"
-      ? "Status: Success"
+      ? "Status: Success✅"
       : status === "failed"
-        ? "Status: Failed"
+        ? "Status: Failed❌"
         : "Status: Uploading to GitHub...";
   const elements = [
     {
@@ -495,7 +495,7 @@ function buildFeishuUploadStatusCard({ status, requestId, rawUrl, path, detail }
     });
   }
   return {
-    config: { wide_screen_mode: true },
+    // config: { wide_screen_mode: true },
     header: {
       template: headerTemplate,
       title: { tag: "plain_text", content: headerTitle }
