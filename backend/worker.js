@@ -447,6 +447,122 @@ async function sendFeishuReplyText(messageId, text, token) {
   }
 }
 
+function buildFeishuUploadStatusCard({ status, requestId, rawUrl, path, detail }) {
+  const safeDetail = String(detail || "").slice(0, 180);
+  const headerTemplate = status === "success" ? "green" : status === "failed" ? "red" : "blue";
+  const headerTitle =
+    status === "success" ? "Image Upload Succeeded" : status === "failed" ? "Image Upload Failed" : "Uploading Image";
+  const statusLine =
+    status === "success"
+      ? "Status: Success"
+      : status === "failed"
+        ? "Status: Failed"
+        : "Status: Uploading to GitHub...";
+  const elements = [
+    {
+      tag: "div",
+      text: {
+        tag: "lark_md",
+        content: statusLine
+      }
+    }
+  ];
+  if (status === "success" && rawUrl) {
+    elements.push({
+      tag: "div",
+      text: {
+        tag: "lark_md",
+        content: `Link: [Open Image](${rawUrl})`
+      }
+    });
+  }
+  if (status === "success" && path) {
+    elements.push({
+      tag: "note",
+      elements: [{ tag: "plain_text", content: `Path: ${path}` }]
+    });
+  }
+  if (safeDetail && status !== "success") {
+    elements.push({
+      tag: "note",
+      elements: [{ tag: "plain_text", content: safeDetail }]
+    });
+  }
+  if (requestId) {
+    elements.push({
+      tag: "note",
+      elements: [{ tag: "plain_text", content: `Request ID: ${requestId}` }]
+    });
+  }
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: headerTemplate,
+      title: { tag: "plain_text", content: headerTitle }
+    },
+    elements
+  };
+}
+
+async function sendFeishuReplyCard(messageId, card, token) {
+  const url = `${FEISHU_API_BASE}/im/v1/messages/${encodeURIComponent(messageId)}/reply`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify({
+      msg_type: "interactive",
+      content: JSON.stringify(card)
+    })
+  });
+  if (!res.ok) {
+    const detail = await readErrorText(res);
+    const logid = res.headers.get("x-tt-logid") || "";
+    throw new Error(`Feishu reply card API failed: ${res.status}; logid=${logid}; detail=${detail}`);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (Number(data.code || 0) !== 0) {
+    throw new Error(`Feishu reply card API error: ${String(data.msg || data.code || "unknown")}`);
+  }
+  return String((data.data || {}).message_id || "");
+}
+
+async function updateFeishuMessageCard(messageId, card, token) {
+  const url = `${FEISHU_API_BASE}/im/v1/messages/${encodeURIComponent(messageId)}`;
+  const body = {
+    msg_type: "interactive",
+    content: JSON.stringify(card)
+  };
+  const attempts = [
+    { method: "PATCH", payload: body },
+    { method: "PATCH", payload: { content: JSON.stringify(card) } }
+  ];
+
+  let lastError = "unknown";
+  for (const attempt of attempts) {
+    const res = await fetch(url, {
+      method: attempt.method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      body: JSON.stringify(attempt.payload)
+    });
+    if (!res.ok) {
+      const detail = await readErrorText(res);
+      const logid = res.headers.get("x-tt-logid") || "";
+      lastError = `status=${res.status}; logid=${logid}; detail=${detail}`;
+      continue;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (Number(data.code || 0) === 0) return;
+    lastError = String(data.msg || data.code || "unknown");
+  }
+  throw new Error(`Feishu update card API failed: ${lastError}`);
+}
+
 async function downloadFeishuImage(imageKey, messageId, token) {
   if (!messageId) throw new Error("Missing message_id for Feishu message resource API");
   const bytes = await downloadFeishuImageByMessageResource(messageId, imageKey, token);
@@ -538,25 +654,53 @@ async function processFeishuImageEvent({ imageKey, messageId, env, requestId }) 
     return;
   }
 
+  let statusCardMessageId = "";
+  try {
+    statusCardMessageId = await sendFeishuReplyCard(
+      messageId,
+      buildFeishuUploadStatusCard({ status: "uploading", requestId }),
+      feishuToken
+    );
+  } catch (err) {
+    console.error("feishu_reply_uploading_card_failed", requestId, err?.message || err);
+  }
+
+  async function finalizeStatus({ status, rawUrl, path, fallbackText, detail }) {
+    const card = buildFeishuUploadStatusCard({ status, requestId, rawUrl, path, detail });
+    if (statusCardMessageId) {
+      try {
+        await updateFeishuMessageCard(statusCardMessageId, card, feishuToken);
+        return;
+      } catch (err) {
+        console.error("feishu_update_status_card_failed", requestId, err?.message || err);
+      }
+    }
+    try {
+      await sendFeishuReplyText(messageId, fallbackText, feishuToken);
+    } catch (replyErr) {
+      console.error("feishu_reply_fallback_text_failed", requestId, replyErr?.message || replyErr);
+    }
+  }
+
   let image;
   try {
     image = await downloadFeishuImage(imageKey, messageId, feishuToken);
   } catch (err) {
     console.error("feishu_download_image_failed", requestId, err?.message || err);
-    try {
-      await sendFeishuReplyText(messageId, "❌ Failed to upload image: unable to download the image from Feishu.", feishuToken);
-    } catch (replyErr) {
-      console.error("feishu_reply_download_failed", requestId, replyErr?.message || replyErr);
-    }
+    await finalizeStatus({
+      status: "failed",
+      fallbackText: "❌ Failed to upload image: unable to download the image from Feishu.",
+      detail: "Unable to download the image from Feishu."
+    });
     return;
   }
   if (image.bytes.length > MAX_SIZE) {
     console.error("feishu_image_too_large", requestId, image.bytes.length);
-    try {
-      await sendFeishuReplyText(messageId, "❌ Failed to upload image: file is larger than 5MB.", feishuToken);
-    } catch (replyErr) {
-      console.error("feishu_reply_too_large_failed", requestId, replyErr?.message || replyErr);
-    }
+    await finalizeStatus({
+      status: "failed",
+      fallbackText: "❌ Failed to upload image: file is larger than 5MB.",
+      detail: "File is larger than 5MB."
+    });
     return;
   }
 
@@ -570,21 +714,22 @@ async function processFeishuImageEvent({ imageKey, messageId, env, requestId }) 
   });
   if (uploaded.error) {
     console.error("feishu_upload_github_failed", requestId);
-    try {
-      await sendFeishuReplyText(messageId, "❌ Failed to upload image to GitHub. Please try again later.", feishuToken);
-    } catch (replyErr) {
-      console.error("feishu_reply_upload_failed", requestId, replyErr?.message || replyErr);
-    }
+    await finalizeStatus({
+      status: "failed",
+      fallbackText: "❌ Failed to upload image to GitHub. Please try again later.",
+      detail: "Failed to upload image to GitHub."
+    });
     return;
   }
 
   const { rawUrl, path } = uploaded.data;
   console.log("feishu_upload_ok", requestId, path, rawUrl);
-  try {
-    await sendFeishuReplyText(messageId, `✅ Successfully uploaded: ${rawUrl}`, feishuToken);
-  } catch (replyErr) {
-    console.error("feishu_reply_success_failed", requestId, replyErr?.message || replyErr);
-  }
+  await finalizeStatus({
+    status: "success",
+    rawUrl,
+    path,
+    fallbackText: `✅ Successfully uploaded: ${rawUrl}`
+  });
 }
 
 async function handleDebugGithub(url, env, cors) {

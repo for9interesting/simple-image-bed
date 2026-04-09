@@ -21,7 +21,11 @@ A Simple image bed deployed to Github Pages, Cloudflare Workers and Feishu(optio
 
 Or via Feishu:
 1. Send image to your feishu bot.
-2. Done.
+2. Bot replies with an "uploading" status card immediately.
+3. The same card is updated to final status:
+   - success: includes the uploaded image link
+   - failure: includes a short error reason
+4. Done.
 
 ## What's needed for deployment
 
@@ -121,6 +125,7 @@ As of now, uploading images via webpage should be ready. Test it on `https://xxx
 1. Become a feishu developer;
 2. Create an app here: https://open.feishu.cn/app
 3. Enter your *worker address* as event & callback url.
+4. In app scopes/capabilities, ensure the bot can both send messages and edit messages (required for status card updates).
 #### Cloudflare worker URL is not available?
 You need a VPS. Deploy what's under folder vps/ to your VPS to relay api calls:
 
